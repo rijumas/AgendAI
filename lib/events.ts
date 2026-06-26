@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import path from "node:path";
+import { getSupabaseServerClient } from "@/lib/supabase";
 
 export type Prioridad = "alta" | "media" | "baja";
 
@@ -13,14 +12,15 @@ export type Evento = {
   prioridad: Prioridad;
 };
 
-type EventosPorFecha = Record<string, Evento[]>;
-type EventosDelDiaLegacy = {
+type EventoRow = {
+  id: string;
   fecha: string;
-  eventos: unknown[];
+  titulo: string;
+  duracion_minutos: number;
+  hora_sugerida: string;
+  prioridad: Prioridad;
 };
 
-const DATA_DIR = path.join(process.cwd(), "data");
-const DATA_FILE = path.join(DATA_DIR, "eventos.json");
 const FECHA_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 export function fechaLocalHoy() {
@@ -75,106 +75,71 @@ function prepararEvento(valor: unknown, fechaFallback = fechaLocalHoy()): Evento
   };
 }
 
-function agregarEvento(mapa: EventosPorFecha, evento: Evento) {
-  mapa[evento.fecha] = [...(mapa[evento.fecha] ?? []), evento];
-}
-
-function normalizarMapa(data: unknown): EventosPorFecha {
-  const mapa: EventosPorFecha = {};
-
-  if (!data || typeof data !== "object" || Array.isArray(data)) {
-    return mapa;
-  }
-
-  const posibleLegacy = data as Partial<EventosDelDiaLegacy>;
-  if (
-    typeof posibleLegacy.fecha === "string" &&
-    esFechaValida(posibleLegacy.fecha) &&
-    Array.isArray(posibleLegacy.eventos)
-  ) {
-    for (const valor of posibleLegacy.eventos) {
-      const evento = prepararEvento(valor, posibleLegacy.fecha);
-      if (evento) agregarEvento(mapa, evento);
-    }
-    return mapa;
-  }
-
-  for (const [fecha, valores] of Object.entries(data)) {
-    if (!esFechaValida(fecha) || !Array.isArray(valores)) continue;
-
-    for (const valor of valores) {
-      const evento = prepararEvento(valor, fecha);
-      if (evento) agregarEvento(mapa, evento);
-    }
-  }
-
-  return mapa;
-}
-
-async function escribirArchivo(data: EventosPorFecha) {
-  await mkdir(DATA_DIR, { recursive: true });
-  await writeFile(DATA_FILE, `${JSON.stringify(data, null, 2)}\n`, "utf8");
-}
-
-async function leerArchivo(): Promise<EventosPorFecha> {
-  try {
-    const contenido = await readFile(DATA_FILE, "utf8");
-    const data = JSON.parse(contenido) as unknown;
-    const normalizado = normalizarMapa(data);
-
-    if (JSON.stringify(data) !== JSON.stringify(normalizado)) {
-      await escribirArchivo(normalizado);
-    }
-
-    return normalizado;
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code !== "ENOENT") {
-      console.error("No se pudo leer data/eventos.json", error);
-    }
-  }
-
-  return {};
+function desdeRow(row: EventoRow): Evento {
+  return {
+    id: row.id,
+    fecha: row.fecha,
+    titulo: row.titulo,
+    duracion_minutos: row.duracion_minutos,
+    hora_sugerida: row.hora_sugerida,
+    prioridad: row.prioridad
+  };
 }
 
 export async function obtenerEventosPorFecha(fecha = fechaLocalHoy()) {
-  const data = await leerArchivo();
+  const supabase = getSupabaseServerClient();
+  const { data, error } = await supabase
+    .from("eventos")
+    .select("id, fecha, titulo, duracion_minutos, hora_sugerida, prioridad")
+    .eq("fecha", fecha)
+    .order("hora_sugerida", { ascending: true });
+
+  if (error) {
+    throw new Error(`No se pudieron cargar los eventos: ${error.message}`);
+  }
+
   return {
     fecha,
-    eventos: data[fecha] ?? []
+    eventos: (data ?? []).map((row) => desdeRow(row as EventoRow))
   };
 }
 
 export async function guardarEventos(eventosNuevos: Evento[]) {
-  const data = await leerArchivo();
-
-  for (const evento of eventosNuevos) {
-    agregarEvento(data, evento);
+  if (eventosNuevos.length === 0) {
+    return [];
   }
 
-  await escribirArchivo(data);
-  return data;
+  const supabase = getSupabaseServerClient();
+  const { data, error } = await supabase
+    .from("eventos")
+    .insert(eventosNuevos)
+    .select("id, fecha, titulo, duracion_minutos, hora_sugerida, prioridad");
+
+  if (error) {
+    throw new Error(`No se pudieron guardar los eventos: ${error.message}`);
+  }
+
+  return (data ?? []).map((row) => desdeRow(row as EventoRow));
 }
 
 export async function eliminarEvento(id: string, fechaRespuesta = fechaLocalHoy()) {
-  const data = await leerArchivo();
-  let encontrado = false;
+  const supabase = getSupabaseServerClient();
+  const { data, error } = await supabase
+    .from("eventos")
+    .delete()
+    .eq("id", id)
+    .select("id");
 
-  for (const [fecha, eventos] of Object.entries(data)) {
-    const filtrados = eventos.filter((evento) => evento.id !== id);
-
-    if (filtrados.length !== eventos.length) {
-      encontrado = true;
-      data[fecha] = filtrados;
-    }
+  if (error) {
+    throw new Error(`No se pudo eliminar el evento: ${error.message}`);
   }
 
-  if (!encontrado) {
-    return { encontrado: false, eventos: data[fechaRespuesta] ?? [] };
-  }
+  const eventosDeFecha = await obtenerEventosPorFecha(fechaRespuesta);
 
-  await escribirArchivo(data);
-  return { encontrado: true, eventos: data[fechaRespuesta] ?? [] };
+  return {
+    encontrado: Boolean(data?.length),
+    eventos: eventosDeFecha.eventos
+  };
 }
 
 export function normalizarEventos(eventos: unknown): Evento[] {

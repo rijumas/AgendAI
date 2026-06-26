@@ -426,7 +426,7 @@ export default function Home() {
           <div>
             <h2 className="text-2xl font-bold text-ink">Eventos del dia</h2>
             <p className="text-sm text-ink/60">
-              {fechaSeleccionada} - se guardan en data/eventos.json.
+              {fechaSeleccionada} - se guardan en Supabase.
             </p>
           </div>
           <div className="flex flex-col gap-3 sm:items-end">

@@ -166,8 +166,8 @@ export async function POST(request: Request) {
       );
     }
 
-    const data = await guardarEventos(eventosNuevos);
-    const eventosHoy = data[fechaLocalHoy()] ?? [];
+    await guardarEventos(eventosNuevos);
+    const { eventos: eventosHoy } = await obtenerEventosPorFecha(fechaLocalHoy());
 
     return NextResponse.json({
       eventos: eventosNuevos,

@@ -1,11 +1,12 @@
 # AgendaIA
 
-AgendaIA es un MVP open source hecho con Next.js, TypeScript y Tailwind CSS. Permite escribir en espanol lo que necesitas hacer hoy, pedirle a Gemini que lo convierta en uno o mas eventos, y guardar esos eventos en `data/eventos.json`.
+AgendaIA es un MVP open source hecho con Next.js, TypeScript y Tailwind CSS. Permite escribir en espanol lo que necesitas hacer, pedirle a Gemini que lo convierta en uno o mas eventos, y guardar esos eventos en Supabase.
 
 ## Requisitos
 
 - Node.js 20 o superior
 - Una API key de Gemini. Puedes crearla gratis, sin tarjeta de credito, en [Google AI Studio](https://aistudio.google.com/apikey).
+- Un proyecto gratis de Supabase. Puedes crearlo en [Supabase](https://supabase.com/).
 
 ## Correr localmente
 
@@ -21,10 +22,12 @@ npm install
 cp .env.example .env.local
 ```
 
-3. Edita `.env.local` y agrega tu API key:
+3. Edita `.env.local` y agrega tus variables:
 
 ```bash
 GEMINI_API_KEY=tu_api_key_real
+NEXT_PUBLIC_SUPABASE_URL=https://tu-proyecto.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=tu_service_role_key
 ```
 
 4. Inicia el servidor de desarrollo:
@@ -53,7 +56,9 @@ Respuesta:
 {
   "eventos": [
     {
+      "id": "d7f47b9d-9e37-4a74-87b8-1d7b8ad5b3c1",
       "titulo": "Estudiar",
+      "fecha": "2026-06-25",
       "duracion_minutos": 120,
       "hora_sugerida": "15:00",
       "prioridad": "media"
@@ -64,6 +69,33 @@ Respuesta:
 
 La ruta tambien acepta `GET /api/parse-event` para cargar los eventos guardados de hoy.
 
+Tambien acepta `GET /api/parse-event?fecha=YYYY-MM-DD` para cargar eventos de una fecha especifica, y `DELETE /api/parse-event?id=uuid&fecha=YYYY-MM-DD` para eliminar un evento por id.
+
+## Supabase
+
+1. Crea un proyecto gratis en [Supabase](https://supabase.com/).
+2. En el dashboard del proyecto, ve a `Project Settings > API`.
+3. Copia `Project URL` en `NEXT_PUBLIC_SUPABASE_URL`.
+4. Copia `service_role secret` en `SUPABASE_SERVICE_ROLE_KEY`.
+
+La `service_role` key solo debe usarse del lado del servidor. No la expongas en componentes cliente ni en codigo que corra en el navegador.
+
+Ejecuta este SQL en el editor SQL de Supabase:
+
+```sql
+create table if not exists public.eventos (
+  id uuid primary key,
+  titulo text not null,
+  duracion_minutos integer not null check (duracion_minutos > 0),
+  hora_sugerida text not null check (hora_sugerida ~ '^([01][0-9]|2[0-3]):[0-5][0-9]$'),
+  prioridad text not null check (prioridad in ('alta', 'media', 'baja')),
+  fecha date not null
+);
+
+create index if not exists eventos_fecha_hora_idx
+  on public.eventos (fecha, hora_sugerida);
+```
+
 ## Desplegar en Vercel
 
 1. Sube el repositorio a GitHub.
@@ -72,11 +104,13 @@ La ruta tambien acepta `GET /api/parse-event` para cargar los eventos guardados 
 
 ```bash
 GEMINI_API_KEY=tu_api_key_real
+NEXT_PUBLIC_SUPABASE_URL=https://tu-proyecto.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=tu_service_role_key
 ```
 
 4. Despliega el proyecto.
 
-Nota: este MVP guarda eventos en `data/eventos.json` como persistencia simple. En Vercel, el sistema de archivos de funciones serverless no debe tratarse como almacenamiento durable; para produccion reemplazaremos esto luego por una base de datos.
+Nota: `data/eventos.json` era la persistencia local anterior. Ya no se usa en el codigo y sigue ignorado por Git.
 
 ## PWA en iPhone
 
