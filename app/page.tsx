@@ -82,6 +82,8 @@ export default function Home() {
   const [eliminandoId, setEliminandoId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+  const textoInterinoRef = useRef("");
+  const interinoConfirmadoManualRef = useRef("");
 
   const cargarEventos = useCallback(async (fecha: string, signal?: AbortSignal) => {
     const response = await fetch(`/api/parse-event?fecha=${encodeURIComponent(fecha)}`, {
@@ -141,9 +143,29 @@ export default function Home() {
   );
   const hoy = fechaLocalHoy();
 
-  function detenerGrabacion() {
-    recognitionRef.current?.stop();
+  function agregarTextoTranscrito(transcripcion: string) {
+    const limpio = transcripcion.trim();
+    if (!limpio) return;
+
+    setTexto((actual) => `${actual}${actual ? " " : ""}${limpio}`);
+  }
+
+  function finalizarGrabacion(confirmarInterino: boolean) {
     setEscuchando(false);
+
+    if (confirmarInterino && textoInterinoRef.current.trim()) {
+      const interino = textoInterinoRef.current.trim();
+      agregarTextoTranscrito(interino);
+      interinoConfirmadoManualRef.current = interino;
+    }
+
+    textoInterinoRef.current = "";
+    setTextoInterino("");
+  }
+
+  function detenerGrabacion() {
+    finalizarGrabacion(true);
+    recognitionRef.current?.stop();
   }
 
   function iniciarGrabacion() {
@@ -189,14 +211,21 @@ export default function Home() {
         }
       }
 
-      if (textoFinal.trim()) {
-        setTexto((actual) => `${actual}${actual ? " " : ""}${textoFinal.trim()}`);
+      const finalLimpio = textoFinal.trim();
+      if (finalLimpio) {
+        if (finalLimpio === interinoConfirmadoManualRef.current) {
+          interinoConfirmadoManualRef.current = "";
+        } else {
+          agregarTextoTranscrito(finalLimpio);
+        }
       }
-      setTextoInterino(interino.trim());
+
+      textoInterinoRef.current = interino.trim();
+      setTextoInterino(textoInterinoRef.current);
     };
 
     recognition.onerror = (event) => {
-      setEscuchando(false);
+      finalizarGrabacion(false);
 
       if (event.error === "not-allowed" || event.error === "service-not-allowed") {
         setModoEntrada("texto");
@@ -210,8 +239,7 @@ export default function Home() {
     };
 
     recognition.onend = () => {
-      setEscuchando(false);
-      setTextoInterino("");
+      finalizarGrabacion(false);
     };
 
     recognitionRef.current = recognition;
