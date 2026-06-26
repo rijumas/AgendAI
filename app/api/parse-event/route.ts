@@ -1,6 +1,8 @@
 import { GoogleGenAI, Type, type Schema } from "@google/genai";
 import { NextResponse } from "next/server";
 import {
+  actualizarEvento,
+  type EventoActualizable,
   eliminarEvento,
   esFechaValida,
   fechaLocalHoy,
@@ -8,6 +10,8 @@ import {
   normalizarEventos,
   obtenerEventosPorFecha
 } from "@/lib/events";
+
+type Prioridad = "alta" | "media" | "baja";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -60,6 +64,51 @@ const eventosResponseSchema: Schema = {
   },
   propertyOrdering: ["eventos"]
 };
+
+function esPrioridad(valor: unknown): valor is Prioridad {
+  return typeof valor === "string" && ["alta", "media", "baja"].includes(valor);
+}
+
+function normalizarCambiosEvento(body: Record<string, unknown>) {
+  const cambios: EventoActualizable = {};
+
+  if ("titulo" in body) {
+    if (typeof body.titulo !== "string" || !body.titulo.trim()) {
+      throw new Error("El titulo debe ser un texto no vacio.");
+    }
+    cambios.titulo = body.titulo.trim();
+  }
+
+  if ("duracion_minutos" in body) {
+    if (
+      typeof body.duracion_minutos !== "number" ||
+      !Number.isFinite(body.duracion_minutos) ||
+      body.duracion_minutos <= 0
+    ) {
+      throw new Error("La duracion_minutos debe ser un numero mayor a 0.");
+    }
+    cambios.duracion_minutos = Math.round(body.duracion_minutos);
+  }
+
+  if ("hora_sugerida" in body) {
+    if (
+      typeof body.hora_sugerida !== "string" ||
+      !/^\d{2}:\d{2}$/.test(body.hora_sugerida)
+    ) {
+      throw new Error('La hora_sugerida debe tener formato "HH:MM".');
+    }
+    cambios.hora_sugerida = body.hora_sugerida;
+  }
+
+  if ("prioridad" in body) {
+    if (!esPrioridad(body.prioridad)) {
+      throw new Error('La prioridad debe ser "alta", "media" o "baja".');
+    }
+    cambios.prioridad = body.prioridad;
+  }
+
+  return cambios;
+}
 
 async function pedirEventosAGemini(textoUsuario: string) {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -136,6 +185,61 @@ export async function DELETE(request: Request) {
     }
 
     return NextResponse.json({ eventos: resultado.eventos });
+  } catch (error) {
+    console.error(error);
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "Error inesperado." },
+      { status: 500 }
+    );
+  }
+}
+
+export async function PATCH(request: Request) {
+  try {
+    const body = (await request.json()) as Record<string, unknown>;
+    const id = typeof body.id === "string" ? body.id.trim() : "";
+    const fechaRespuesta =
+      typeof body.fecha === "string" && esFechaValida(body.fecha)
+        ? body.fecha
+        : fechaLocalHoy();
+
+    if (!id) {
+      return NextResponse.json(
+        { error: "Falta el id del evento a actualizar." },
+        { status: 400 }
+      );
+    }
+
+    let cambios: EventoActualizable;
+    try {
+      cambios = normalizarCambiosEvento(body);
+    } catch (error) {
+      return NextResponse.json(
+        { error: error instanceof Error ? error.message : "Datos invalidos." },
+        { status: 400 }
+      );
+    }
+
+    if (Object.keys(cambios).length === 0) {
+      return NextResponse.json(
+        { error: "No se envio ningun campo para actualizar." },
+        { status: 400 }
+      );
+    }
+
+    const resultado = await actualizarEvento(id, cambios, fechaRespuesta);
+
+    if (!resultado.encontrado) {
+      return NextResponse.json(
+        { error: "No se encontro un evento con ese id.", eventos: resultado.eventos },
+        { status: 404 }
+      );
+    }
+
+    return NextResponse.json({
+      evento: resultado.evento,
+      eventos: resultado.eventos
+    });
   } catch (error) {
     console.error(error);
     return NextResponse.json(

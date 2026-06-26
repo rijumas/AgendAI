@@ -15,6 +15,7 @@ type CalendarioGridProps = {
   eventos: EventoCalendario[];
   eliminandoId: string | null;
   onEliminar: (id: string) => void;
+  onEditar: (evento: EventoCalendario) => void;
   fecha: string;
 };
 
@@ -27,7 +28,7 @@ type EventoPosicionado = {
 };
 
 const HORA_INICIO = 6;
-const HORA_FIN = 23;
+const HORA_FIN = 24;
 const ALTURA_HORA = 72;
 const MINUTOS_INICIO = HORA_INICIO * 60;
 const MINUTOS_FIN = HORA_FIN * 60;
@@ -113,6 +114,7 @@ function posicionarEventos(eventos: EventoCalendario[]) {
 }
 
 function formatoHora(hora: number) {
+  if (hora === 24) return "00:00";
   return `${String(hora).padStart(2, "0")}:00`;
 }
 
@@ -120,6 +122,7 @@ export default function CalendarioGrid({
   eventos,
   eliminandoId,
   onEliminar,
+  onEditar,
   fecha
 }: CalendarioGridProps) {
   const eventosPosicionados = posicionarEventos(eventos);
@@ -129,7 +132,7 @@ export default function CalendarioGrid({
     <div className="overflow-hidden rounded-lg border border-ink/10 bg-white shadow-sm">
       <div className="grid grid-cols-[4.5rem_1fr] border-b border-ink/10 bg-white px-3 py-3 text-sm font-bold text-ink">
         <div>{fecha}</div>
-        <div>6:00 - 23:00</div>
+        <div>6:00 - 00:00</div>
       </div>
 
       <div className="max-h-[68vh] overflow-y-auto">
@@ -193,6 +196,13 @@ export default function CalendarioGrid({
                     <p className="mt-1 truncate text-[11px] leading-tight opacity-75">
                       {evento.hora_sugerida} - {evento.duracion_minutos} min
                     </p>
+                    <button
+                      type="button"
+                      onClick={() => onEditar(evento)}
+                      className="mt-auto w-fit rounded border border-current/20 px-1.5 text-[10px] font-bold leading-4 opacity-75 transition hover:bg-white/70 hover:opacity-100"
+                    >
+                      Editar
+                    </button>
                   </div>
                 </article>
               );

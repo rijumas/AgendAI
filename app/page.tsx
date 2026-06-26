@@ -16,6 +16,13 @@ type Evento = {
   prioridad: Prioridad;
 };
 
+type EventoEditForm = {
+  titulo: string;
+  duracion_minutos: string;
+  hora_sugerida: string;
+  prioridad: Prioridad;
+};
+
 type SpeechRecognitionConstructor = new () => SpeechRecognitionLike;
 
 type SpeechRecognitionLike = {
@@ -80,6 +87,14 @@ export default function Home() {
   const [mensajeVoz, setMensajeVoz] = useState("");
   const [cargando, setCargando] = useState(false);
   const [eliminandoId, setEliminandoId] = useState<string | null>(null);
+  const [editandoEvento, setEditandoEvento] = useState<Evento | null>(null);
+  const [formEdicion, setFormEdicion] = useState<EventoEditForm>({
+    titulo: "",
+    duracion_minutos: "",
+    hora_sugerida: "",
+    prioridad: "media"
+  });
+  const [guardandoEdicion, setGuardandoEdicion] = useState(false);
   const [error, setError] = useState("");
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const textoInterinoRef = useRef("");
@@ -322,6 +337,86 @@ export default function Home() {
     }
   }
 
+  function abrirEditor(evento: Evento) {
+    setEditandoEvento(evento);
+    setFormEdicion({
+      titulo: evento.titulo,
+      duracion_minutos: String(evento.duracion_minutos),
+      hora_sugerida: evento.hora_sugerida,
+      prioridad: evento.prioridad
+    });
+    setError("");
+  }
+
+  function cerrarEditor() {
+    setEditandoEvento(null);
+    setGuardandoEdicion(false);
+  }
+
+  async function guardarEdicion(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!editandoEvento) return;
+
+    const duracion = Number(formEdicion.duracion_minutos);
+    if (!formEdicion.titulo.trim()) {
+      setError("El titulo no puede estar vacio.");
+      return;
+    }
+    if (!Number.isFinite(duracion) || duracion <= 0) {
+      setError("La duracion debe ser mayor a 0.");
+      return;
+    }
+    if (!/^\d{2}:\d{2}$/.test(formEdicion.hora_sugerida)) {
+      setError('La hora debe tener formato "HH:MM".');
+      return;
+    }
+
+    setGuardandoEdicion(true);
+    setError("");
+
+    try {
+      const response = await fetch("/api/parse-event", {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          id: editandoEvento.id,
+          fecha: fechaSeleccionada,
+          titulo: formEdicion.titulo,
+          duracion_minutos: duracion,
+          hora_sugerida: formEdicion.hora_sugerida,
+          prioridad: formEdicion.prioridad
+        })
+      });
+      const data = (await response.json()) as {
+        evento?: Evento;
+        eventos?: Evento[];
+        error?: string;
+      };
+
+      if (!response.ok) {
+        throw new Error(data.error ?? "No se pudo actualizar el evento.");
+      }
+
+      setEventos((actuales) =>
+        Array.isArray(data.eventos)
+          ? data.eventos
+          : actuales.map((eventoActual) =>
+              eventoActual.id === data.evento?.id ? data.evento : eventoActual
+            )
+      );
+      cerrarEditor();
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "No se pudo actualizar el evento."
+      );
+    } finally {
+      setGuardandoEdicion(false);
+    }
+  }
+
   function descartarTexto() {
     detenerGrabacion();
     setTexto("");
@@ -449,6 +544,108 @@ export default function Home() {
         </p>
       ) : null}
 
+      {editandoEvento ? (
+        <section className="mt-4 rounded-lg border border-ink/10 bg-white p-4 shadow-sm">
+          <div className="mb-4 flex items-start justify-between gap-4">
+            <div>
+              <h2 className="text-lg font-bold text-ink">Editar evento</h2>
+              <p className="text-sm text-ink/60">{editandoEvento.fecha}</p>
+            </div>
+            <button
+              type="button"
+              onClick={cerrarEditor}
+              className="rounded-md border border-ink/15 px-3 py-1 text-xs font-bold text-ink/70 transition hover:bg-ink/5"
+            >
+              Cerrar
+            </button>
+          </div>
+          <form onSubmit={guardarEdicion} className="grid gap-3 sm:grid-cols-4">
+            <label className="sm:col-span-2">
+              <span className="mb-1 block text-xs font-bold uppercase text-ink/60">
+                Titulo
+              </span>
+              <input
+                value={formEdicion.titulo}
+                onChange={(event) =>
+                  setFormEdicion((actual) => ({
+                    ...actual,
+                    titulo: event.target.value
+                  }))
+                }
+                className="h-11 w-full rounded-md border border-ink/15 px-3 text-sm text-ink outline-none transition focus:border-mint focus:ring-4 focus:ring-mint/20"
+              />
+            </label>
+            <label>
+              <span className="mb-1 block text-xs font-bold uppercase text-ink/60">
+                Hora
+              </span>
+              <input
+                value={formEdicion.hora_sugerida}
+                onChange={(event) =>
+                  setFormEdicion((actual) => ({
+                    ...actual,
+                    hora_sugerida: event.target.value
+                  }))
+                }
+                className="h-11 w-full rounded-md border border-ink/15 px-3 text-sm text-ink outline-none transition focus:border-mint focus:ring-4 focus:ring-mint/20"
+              />
+            </label>
+            <label>
+              <span className="mb-1 block text-xs font-bold uppercase text-ink/60">
+                Duracion
+              </span>
+              <input
+                type="number"
+                min="1"
+                value={formEdicion.duracion_minutos}
+                onChange={(event) =>
+                  setFormEdicion((actual) => ({
+                    ...actual,
+                    duracion_minutos: event.target.value
+                  }))
+                }
+                className="h-11 w-full rounded-md border border-ink/15 px-3 text-sm text-ink outline-none transition focus:border-mint focus:ring-4 focus:ring-mint/20"
+              />
+            </label>
+            <label>
+              <span className="mb-1 block text-xs font-bold uppercase text-ink/60">
+                Prioridad
+              </span>
+              <select
+                value={formEdicion.prioridad}
+                onChange={(event) =>
+                  setFormEdicion((actual) => ({
+                    ...actual,
+                    prioridad: event.target.value as Prioridad
+                  }))
+                }
+                className="h-11 w-full rounded-md border border-ink/15 bg-white px-3 text-sm text-ink outline-none transition focus:border-mint focus:ring-4 focus:ring-mint/20"
+              >
+                <option value="alta">Alta</option>
+                <option value="media">Media</option>
+                <option value="baja">Baja</option>
+              </select>
+            </label>
+            <div className="flex items-end gap-2 sm:col-span-3">
+              <button
+                type="submit"
+                disabled={guardandoEdicion}
+                className="h-11 rounded-md bg-ink px-5 text-sm font-bold text-white transition hover:bg-ink/90 disabled:cursor-not-allowed disabled:bg-ink/45"
+              >
+                {guardandoEdicion ? "Guardando..." : "Guardar cambios"}
+              </button>
+              <button
+                type="button"
+                onClick={cerrarEditor}
+                className="h-11 rounded-md border border-ink/15 px-4 text-sm font-bold text-ink/70 transition hover:bg-ink/5"
+              >
+                Cancelar
+              </button>
+            </div>
+          </form>
+        </section>
+      ) : null}
+
       <section className="mt-8 flex-1">
         <div className="mb-4 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div>
@@ -521,6 +718,7 @@ export default function Home() {
             eventos={eventos}
             eliminandoId={eliminandoId}
             onEliminar={eliminarEvento}
+            onEditar={abrirEditor}
             fecha={fechaSeleccionada}
           />
         ) : (
@@ -543,6 +741,13 @@ export default function Home() {
                     >
                       {evento.prioridad}
                     </span>
+                    <button
+                      type="button"
+                      onClick={() => abrirEditor(evento)}
+                      className="rounded-md border border-ink/15 px-3 py-1 text-xs font-bold text-ink/70 transition hover:bg-ink/5"
+                    >
+                      Editar
+                    </button>
                     <button
                       type="button"
                       onClick={() => eliminarEvento(evento.id)}

@@ -21,6 +21,10 @@ type EventoRow = {
   prioridad: Prioridad;
 };
 
+export type EventoActualizable = Partial<
+  Pick<Evento, "titulo" | "duracion_minutos" | "hora_sugerida" | "prioridad">
+>;
+
 const FECHA_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 export function fechaLocalHoy() {
@@ -138,6 +142,32 @@ export async function eliminarEvento(id: string, fechaRespuesta = fechaLocalHoy(
 
   return {
     encontrado: Boolean(data?.length),
+    eventos: eventosDeFecha.eventos
+  };
+}
+
+export async function actualizarEvento(
+  id: string,
+  cambios: EventoActualizable,
+  fechaRespuesta = fechaLocalHoy()
+) {
+  const supabase = getSupabaseServerClient();
+  const { data, error } = await supabase
+    .from("eventos")
+    .update(cambios)
+    .eq("id", id)
+    .select("id, fecha, titulo, duracion_minutos, hora_sugerida, prioridad");
+
+  if (error) {
+    throw new Error(`No se pudo actualizar el evento: ${error.message}`);
+  }
+
+  const eventosDeFecha = await obtenerEventosPorFecha(fechaRespuesta);
+  const eventoActualizado = data?.[0] ? desdeRow(data[0] as EventoRow) : null;
+
+  return {
+    encontrado: Boolean(eventoActualizado),
+    evento: eventoActualizado,
     eventos: eventosDeFecha.eventos
   };
 }
