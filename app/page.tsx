@@ -7,6 +7,7 @@ import CalendarioGrid from "./CalendarioGrid";
 type Prioridad = "alta" | "media" | "baja";
 type Vista = "lista" | "calendario";
 type ModoEntrada = "voz" | "texto";
+type EstadoEnergia = "energia" | "normal" | "cansado" | "agotado";
 
 type Evento = {
   id: string;
@@ -62,6 +63,29 @@ const prioridadClases: Record<Prioridad, string> = {
   baja: "border-emerald-200 bg-emerald-50 text-emerald-700"
 };
 
+const opcionesEnergia: Array<{ valor: EstadoEnergia; label: string; detalle: string }> = [
+  {
+    valor: "energia",
+    label: "Con energia",
+    detalle: "Mantener el dia como esta"
+  },
+  {
+    valor: "normal",
+    label: "Normal",
+    detalle: "Sin cambios automaticos"
+  },
+  {
+    valor: "cansado",
+    label: "Cansado",
+    detalle: "Mover tareas pesadas mas tarde"
+  },
+  {
+    valor: "agotado",
+    label: "Muy cansado",
+    detalle: "Aliviar el dia todo lo posible"
+  }
+];
+
 function fechaLocalHoy() {
   return new Intl.DateTimeFormat("en-CA", {
     year: "numeric",
@@ -98,6 +122,10 @@ export default function Home() {
   });
   const [guardandoEdicion, setGuardandoEdicion] = useState(false);
   const [error, setError] = useState("");
+  const [mostrarEstadoDiario, setMostrarEstadoDiario] = useState(false);
+  const [estadoDiarioConsultado, setEstadoDiarioConsultado] = useState(false);
+  const [guardandoEstadoDiario, setGuardandoEstadoDiario] = useState(false);
+  const [mensajeEstadoDiario, setMensajeEstadoDiario] = useState("");
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const textoInterinoRef = useRef("");
   const interinoConfirmadoManualRef = useRef("");
@@ -133,6 +161,8 @@ export default function Home() {
   useEffect(() => {
     if (status !== "authenticated") {
       setEventos([]);
+      setMostrarEstadoDiario(false);
+      setEstadoDiarioConsultado(false);
       return;
     }
 
@@ -158,6 +188,49 @@ export default function Home() {
       controller.abort();
     };
   }, [cargarEventos, fechaSeleccionada, status]);
+
+  useEffect(() => {
+    if (status !== "authenticated" || estadoDiarioConsultado) {
+      return;
+    }
+
+    const controller = new AbortController();
+
+    async function consultarEstadoDiario() {
+      try {
+        const response = await fetch("/api/mood", {
+          cache: "no-store",
+          signal: controller.signal
+        });
+        const data = (await response.json()) as {
+          debePreguntar?: boolean;
+          error?: string;
+        };
+
+        if (!response.ok) {
+          throw new Error(data.error ?? "No se pudo consultar tu energia de hoy.");
+        }
+
+        setMostrarEstadoDiario(Boolean(data.debePreguntar));
+        setEstadoDiarioConsultado(true);
+      } catch (err) {
+        if (!controller.signal.aborted) {
+          setEstadoDiarioConsultado(true);
+          setError(
+            err instanceof Error
+              ? err.message
+              : "No se pudo consultar tu energia de hoy."
+          );
+        }
+      }
+    }
+
+    consultarEstadoDiario();
+
+    return () => {
+      controller.abort();
+    };
+  }, [estadoDiarioConsultado, status]);
 
   const totalMinutos = useMemo(
     () => eventos.reduce((total, evento) => total + evento.duracion_minutos, 0),
@@ -424,6 +497,52 @@ export default function Home() {
     }
   }
 
+  async function guardarEstadoDiario(estado?: EstadoEnergia) {
+    setGuardandoEstadoDiario(true);
+    setError("");
+
+    try {
+      const response = await fetch("/api/mood", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify(
+          estado
+            ? {
+                estado
+              }
+            : {
+                omitido: true
+              }
+        )
+      });
+      const data = (await response.json()) as {
+        mensaje?: string;
+        eventosHoy?: Evento[];
+        error?: string;
+      };
+
+      if (!response.ok) {
+        throw new Error(data.error ?? "No se pudo guardar tu energia de hoy.");
+      }
+
+      setMostrarEstadoDiario(false);
+      if (data.mensaje) {
+        setMensajeEstadoDiario(data.mensaje);
+      }
+      if (Array.isArray(data.eventosHoy) && fechaSeleccionada === hoy) {
+        setEventos(data.eventosHoy);
+      } else if (estado) {
+        await cargarEventos(fechaSeleccionada);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "No se pudo guardar tu energia.");
+    } finally {
+      setGuardandoEstadoDiario(false);
+    }
+  }
+
   function descartarTexto() {
     detenerGrabacion();
     setTexto("");
@@ -480,6 +599,47 @@ export default function Home() {
 
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-5xl flex-col px-5 py-8 sm:px-8 sm:py-12">
+      {mostrarEstadoDiario ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/35 px-4 py-6 backdrop-blur-sm">
+          <section className="w-full max-w-md rounded-lg border border-ink/10 bg-white p-5 shadow-xl">
+            <div className="mb-4 flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-2xl font-bold text-ink">Como te sientes hoy?</h2>
+                <p className="mt-1 text-sm text-ink/65">
+                  Si estas bajo de energia, puedo mover tareas pesadas futuras.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => guardarEstadoDiario()}
+                disabled={guardandoEstadoDiario}
+                className="rounded-md border border-ink/15 px-3 py-1 text-xs font-bold text-ink/70 transition hover:bg-ink/5 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Cerrar
+              </button>
+            </div>
+            <div className="grid gap-2">
+              {opcionesEnergia.map((opcion) => (
+                <button
+                  key={opcion.valor}
+                  type="button"
+                  onClick={() => guardarEstadoDiario(opcion.valor)}
+                  disabled={guardandoEstadoDiario}
+                  className="rounded-md border border-ink/15 bg-white px-4 py-3 text-left transition hover:border-mint/50 hover:bg-mint/10 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <span className="block text-sm font-bold text-ink">
+                    {opcion.label}
+                  </span>
+                  <span className="mt-1 block text-xs text-ink/60">
+                    {opcion.detalle}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </section>
+        </div>
+      ) : null}
+
       <section className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <p className="mb-2 text-sm font-semibold uppercase tracking-wide text-mint">
@@ -608,6 +768,12 @@ export default function Home() {
       {error ? (
         <p className="mt-4 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
           {error}
+        </p>
+      ) : null}
+
+      {mensajeEstadoDiario ? (
+        <p className="mt-4 rounded-md border border-mint/30 bg-mint/10 px-4 py-3 text-sm font-semibold text-ink">
+          {mensajeEstadoDiario}
         </p>
       ) : null}
 

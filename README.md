@@ -163,7 +163,22 @@ create table if not exists public.tokens_google (
   updated_at timestamptz not null default now()
 );
 
+create table if not exists public.estados_animo_diarios (
+  user_id text not null,
+  fecha date not null,
+  estado text check (estado in ('energia', 'normal', 'cansado', 'agotado')),
+  omitido boolean not null default false,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  primary key (user_id, fecha)
+);
+
+create index if not exists estados_animo_diarios_user_fecha_idx
+  on public.estados_animo_diarios (user_id, fecha);
+
 alter table public.tokens_google enable row level security;
+
+alter table public.estados_animo_diarios enable row level security;
 
 alter table public.eventos enable row level security;
 
@@ -212,6 +227,8 @@ create policy "eventos_delete_own"
 La app escribe `user_id` desde la sesion de NextAuth en el backend. La `service_role` key evita depender de RLS durante las API routes, pero las politicas quedan listas como capa de seguridad para una futura integracion directa con Supabase desde el cliente.
 
 La tabla `tokens_google` guarda tokens sensibles de Google Calendar. Dejala sin politicas de acceso para cliente; solo debe usarse desde el backend con `SUPABASE_SERVICE_ROLE_KEY`.
+
+La tabla `estados_animo_diarios` guarda una respuesta rapida por usuario y fecha. Si el usuario cierra el modal sin responder, se guarda `omitido = true` para no insistir hasta el dia siguiente. AgendaIA considera pesados los eventos de prioridad `alta` o de 90 minutos o mas; cuando el usuario responde `cansado` o `agotado`, mueve solo eventos futuros de hoy usando la misma funcion de actualizacion que ya sincroniza con Google Calendar.
 
 ## Desplegar en Vercel
 
