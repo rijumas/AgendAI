@@ -1,5 +1,7 @@
 import { GoogleGenAI, Type, type Schema } from "@google/genai";
+import { getServerSession } from "next-auth";
 import { NextResponse } from "next/server";
+import { authOptions } from "@/auth";
 import {
   actualizarEvento,
   type EventoActualizable,
@@ -119,6 +121,18 @@ const eventosResponseSchema: Schema = {
   propertyOrdering: ["eventos"]
 };
 
+async function obtenerUserIdAutenticado() {
+  const session = await getServerSession(authOptions);
+  return session?.user?.id ?? session?.user?.email ?? null;
+}
+
+function respuestaNoAutorizado() {
+  return NextResponse.json(
+    { error: "No autorizado. Inicia sesion con Google para continuar." },
+    { status: 401 }
+  );
+}
+
 function esPrioridad(valor: unknown): valor is Prioridad {
   return typeof valor === "string" && ["alta", "media", "baja"].includes(valor);
 }
@@ -218,10 +232,10 @@ function detectarFechasRelevantes(textoUsuario: string) {
   return [...fechas];
 }
 
-async function obtenerEventosContexto(textoUsuario: string) {
+async function obtenerEventosContexto(userId: string, textoUsuario: string) {
   const fechas = detectarFechasRelevantes(textoUsuario);
   const eventosPorFecha = await Promise.all(
-    fechas.map((fecha) => obtenerEventosPorFecha(fecha))
+    fechas.map((fecha) => obtenerEventosPorFecha(userId, fecha))
   );
   const eventos = eventosPorFecha.flatMap((resultado) => resultado.eventos);
   const eventosUnicos = new Map(eventos.map((evento) => [evento.id, evento]));
@@ -280,10 +294,10 @@ function normalizarAcciones(acciones: unknown, eventosContexto: Evento[]) {
     .filter((accion): accion is AccionEvento => accion !== null);
 }
 
-async function procesarAcciones(acciones: AccionEvento[]) {
+async function procesarAcciones(userId: string, acciones: AccionEvento[]) {
   for (const accion of acciones) {
     if (accion.tipo_accion === "borrar") {
-      await eliminarEvento(accion.id_evento);
+      await eliminarEvento(userId, accion.id_evento);
       continue;
     }
 
@@ -291,7 +305,7 @@ async function procesarAcciones(acciones: AccionEvento[]) {
       continue;
     }
 
-    await actualizarEvento(accion.id_evento, accion.cambios);
+    await actualizarEvento(userId, accion.id_evento, accion.cambios);
   }
 }
 
@@ -349,15 +363,21 @@ async function pedirEventosAGemini(textoUsuario: string, eventosContexto: Evento
 }
 
 export async function GET(request: Request) {
+  const userId = await obtenerUserIdAutenticado();
+  if (!userId) return respuestaNoAutorizado();
+
   const { searchParams } = new URL(request.url);
   const fechaParam = searchParams.get("fecha")?.trim();
   const fecha = fechaParam && esFechaValida(fechaParam) ? fechaParam : fechaLocalHoy();
-  const data = await obtenerEventosPorFecha(fecha);
+  const data = await obtenerEventosPorFecha(userId, fecha);
   return NextResponse.json({ eventos: data.eventos });
 }
 
 export async function DELETE(request: Request) {
   try {
+    const userId = await obtenerUserIdAutenticado();
+    if (!userId) return respuestaNoAutorizado();
+
     const { searchParams } = new URL(request.url);
     const id = searchParams.get("id")?.trim();
     const fechaParam = searchParams.get("fecha")?.trim();
@@ -371,7 +391,7 @@ export async function DELETE(request: Request) {
       );
     }
 
-    const resultado = await eliminarEvento(id, fechaRespuesta);
+    const resultado = await eliminarEvento(userId, id, fechaRespuesta);
 
     if (!resultado.encontrado) {
       return NextResponse.json(
@@ -392,6 +412,9 @@ export async function DELETE(request: Request) {
 
 export async function PATCH(request: Request) {
   try {
+    const userId = await obtenerUserIdAutenticado();
+    if (!userId) return respuestaNoAutorizado();
+
     const body = (await request.json()) as Record<string, unknown>;
     const id = typeof body.id === "string" ? body.id.trim() : "";
     const fechaRespuesta =
@@ -423,7 +446,7 @@ export async function PATCH(request: Request) {
       );
     }
 
-    const resultado = await actualizarEvento(id, cambios, fechaRespuesta);
+    const resultado = await actualizarEvento(userId, id, cambios, fechaRespuesta);
 
     if (!resultado.encontrado) {
       return NextResponse.json(
@@ -447,6 +470,9 @@ export async function PATCH(request: Request) {
 
 export async function POST(request: Request) {
   try {
+    const userId = await obtenerUserIdAutenticado();
+    if (!userId) return respuestaNoAutorizado();
+
     const body = (await request.json()) as { texto?: unknown };
     const texto = typeof body.texto === "string" ? body.texto.trim() : "";
 
@@ -457,7 +483,7 @@ export async function POST(request: Request) {
       );
     }
 
-    const eventosContexto = await obtenerEventosContexto(texto);
+    const eventosContexto = await obtenerEventosContexto(userId, texto);
     const resultadoGemini = await pedirEventosAGemini(texto, eventosContexto);
     const eventosNuevos = resultadoGemini.eventos;
     const acciones = resultadoGemini.acciones;
@@ -470,10 +496,10 @@ export async function POST(request: Request) {
     }
 
     if (eventosNuevos.length > 0) {
-      await guardarEventos(eventosNuevos);
+      await guardarEventos(eventosNuevos, userId);
     }
-    await procesarAcciones(acciones);
-    const { eventos: eventosHoy } = await obtenerEventosPorFecha(fechaLocalHoy());
+    await procesarAcciones(userId, acciones);
+    const { eventos: eventosHoy } = await obtenerEventosPorFecha(userId, fechaLocalHoy());
 
     return NextResponse.json({
       eventos: eventosNuevos,

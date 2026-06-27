@@ -126,11 +126,12 @@ AUTH_URL=https://tu-dominio.vercel.app
 
 La `service_role` key solo debe usarse del lado del servidor. No la expongas en componentes cliente ni en codigo que corra en el navegador.
 
-Ejecuta este SQL en el editor SQL de Supabase:
+Ejecuta este SQL en el editor SQL de Supabase. Si ya tenias eventos creados antes de agregar login multi-usuario, este SQL conserva esas filas y las deja con `user_id` nulo; asi no se asignan por accidente a una cuenta incorrecta.
 
 ```sql
 create table if not exists public.eventos (
   id uuid primary key,
+  user_id text,
   titulo text not null,
   duracion_minutos integer not null check (duracion_minutos > 0),
   hora_sugerida text not null check (hora_sugerida ~ '^([01][0-9]|2[0-3]):[0-5][0-9]$'),
@@ -138,9 +139,57 @@ create table if not exists public.eventos (
   fecha date not null
 );
 
-create index if not exists eventos_fecha_hora_idx
-  on public.eventos (fecha, hora_sugerida);
+alter table public.eventos
+  add column if not exists user_id text;
+
+create index if not exists eventos_user_fecha_hora_idx
+  on public.eventos (user_id, fecha, hora_sugerida);
+
+alter table public.eventos enable row level security;
+
+drop policy if exists "eventos_select_own" on public.eventos;
+drop policy if exists "eventos_insert_own" on public.eventos;
+drop policy if exists "eventos_update_own" on public.eventos;
+drop policy if exists "eventos_delete_own" on public.eventos;
+
+create policy "eventos_select_own"
+  on public.eventos
+  for select
+  using (
+    auth.role() = 'authenticated'
+    and user_id in (auth.uid()::text, auth.jwt() ->> 'sub', auth.jwt() ->> 'email')
+  );
+
+create policy "eventos_insert_own"
+  on public.eventos
+  for insert
+  with check (
+    auth.role() = 'authenticated'
+    and user_id in (auth.uid()::text, auth.jwt() ->> 'sub', auth.jwt() ->> 'email')
+  );
+
+create policy "eventos_update_own"
+  on public.eventos
+  for update
+  using (
+    auth.role() = 'authenticated'
+    and user_id in (auth.uid()::text, auth.jwt() ->> 'sub', auth.jwt() ->> 'email')
+  )
+  with check (
+    auth.role() = 'authenticated'
+    and user_id in (auth.uid()::text, auth.jwt() ->> 'sub', auth.jwt() ->> 'email')
+  );
+
+create policy "eventos_delete_own"
+  on public.eventos
+  for delete
+  using (
+    auth.role() = 'authenticated'
+    and user_id in (auth.uid()::text, auth.jwt() ->> 'sub', auth.jwt() ->> 'email')
+  );
 ```
+
+La app escribe `user_id` desde la sesion de NextAuth en el backend. La `service_role` key evita depender de RLS durante las API routes, pero las politicas quedan listas como capa de seguridad para una futura integracion directa con Supabase desde el cliente.
 
 ## Desplegar en Vercel
 

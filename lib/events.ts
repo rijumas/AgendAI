@@ -90,11 +90,12 @@ function desdeRow(row: EventoRow): Evento {
   };
 }
 
-export async function obtenerEventosPorFecha(fecha = fechaLocalHoy()) {
+export async function obtenerEventosPorFecha(userId: string, fecha = fechaLocalHoy()) {
   const supabase = getSupabaseServerClient();
   const { data, error } = await supabase
     .from("eventos")
     .select("id, fecha, titulo, duracion_minutos, hora_sugerida, prioridad")
+    .eq("user_id", userId)
     .eq("fecha", fecha)
     .order("hora_sugerida", { ascending: true });
 
@@ -108,7 +109,7 @@ export async function obtenerEventosPorFecha(fecha = fechaLocalHoy()) {
   };
 }
 
-export async function guardarEventos(eventosNuevos: Evento[]) {
+export async function guardarEventos(eventosNuevos: Evento[], userId: string) {
   if (eventosNuevos.length === 0) {
     return [];
   }
@@ -116,7 +117,7 @@ export async function guardarEventos(eventosNuevos: Evento[]) {
   const supabase = getSupabaseServerClient();
   const { data, error } = await supabase
     .from("eventos")
-    .insert(eventosNuevos)
+    .insert(eventosNuevos.map((evento) => ({ ...evento, user_id: userId })))
     .select("id, fecha, titulo, duracion_minutos, hora_sugerida, prioridad");
 
   if (error) {
@@ -126,11 +127,12 @@ export async function guardarEventos(eventosNuevos: Evento[]) {
   return (data ?? []).map((row) => desdeRow(row as EventoRow));
 }
 
-export async function eliminarEvento(id: string, fechaRespuesta = fechaLocalHoy()) {
+export async function eliminarEvento(userId: string, id: string, fechaRespuesta = fechaLocalHoy()) {
   const supabase = getSupabaseServerClient();
   const { data, error } = await supabase
     .from("eventos")
     .delete()
+    .eq("user_id", userId)
     .eq("id", id)
     .select("id");
 
@@ -138,7 +140,7 @@ export async function eliminarEvento(id: string, fechaRespuesta = fechaLocalHoy(
     throw new Error(`No se pudo eliminar el evento: ${error.message}`);
   }
 
-  const eventosDeFecha = await obtenerEventosPorFecha(fechaRespuesta);
+  const eventosDeFecha = await obtenerEventosPorFecha(userId, fechaRespuesta);
 
   return {
     encontrado: Boolean(data?.length),
@@ -147,6 +149,7 @@ export async function eliminarEvento(id: string, fechaRespuesta = fechaLocalHoy(
 }
 
 export async function actualizarEvento(
+  userId: string,
   id: string,
   cambios: EventoActualizable,
   fechaRespuesta = fechaLocalHoy()
@@ -155,6 +158,7 @@ export async function actualizarEvento(
   const { data, error } = await supabase
     .from("eventos")
     .update(cambios)
+    .eq("user_id", userId)
     .eq("id", id)
     .select("id, fecha, titulo, duracion_minutos, hora_sugerida, prioridad");
 
@@ -162,7 +166,7 @@ export async function actualizarEvento(
     throw new Error(`No se pudo actualizar el evento: ${error.message}`);
   }
 
-  const eventosDeFecha = await obtenerEventosPorFecha(fechaRespuesta);
+  const eventosDeFecha = await obtenerEventosPorFecha(userId, fechaRespuesta);
   const eventoActualizado = data?.[0] ? desdeRow(data[0] as EventoRow) : null;
 
   return {
