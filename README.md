@@ -7,7 +7,7 @@ AgendaIA es un MVP open source hecho con Next.js, TypeScript y Tailwind CSS. Per
 - Node.js 20 o superior
 - Una API key de Gemini. Puedes crearla gratis, sin tarjeta de credito, en [Google AI Studio](https://aistudio.google.com/apikey).
 - Un proyecto gratis de Supabase. Puedes crearlo en [Supabase](https://supabase.com/).
-- Credenciales OAuth de Google para iniciar sesion con Auth.js.
+- Credenciales OAuth de Google para iniciar sesion con Auth.js y permitir crear/editar/borrar eventos en Google Calendar.
 
 ## Correr localmente
 
@@ -83,33 +83,36 @@ Tambien acepta `GET /api/parse-event?fecha=YYYY-MM-DD` para cargar eventos de un
 
 ## Google Auth
 
-AgendaIA usa Auth.js (`next-auth`) con Google como unico metodo de login.
+AgendaIA usa Auth.js (`next-auth`) con Google como unico metodo de login. El login pide permiso para manejar eventos del calendario principal del usuario con el scope `https://www.googleapis.com/auth/calendar.events`.
 
 Configura Google Cloud Console asi:
 
 1. Entra a [Google Cloud Console](https://console.cloud.google.com/).
 2. Crea o selecciona un proyecto.
 3. Ve a `APIs & Services > OAuth consent screen`.
-4. Configura la pantalla de consentimiento. Para este paso no necesitas Google Calendar API todavia.
-5. Ve a `APIs & Services > Credentials`.
-6. Crea `OAuth client ID`.
-7. Elige tipo `Web application`.
-8. En `Authorized JavaScript origins`, agrega:
+4. Configura la pantalla de consentimiento OAuth.
+5. En la pantalla de consentimiento, agrega el scope `https://www.googleapis.com/auth/calendar.events`.
+6. Si la app esta en modo `Testing`, agrega tu correo y los correos permitidos en `Test users`; si no, Google puede bloquear el login con ese scope.
+7. Ve a `APIs & Services > Library` y habilita `Google Calendar API`.
+8. Ve a `APIs & Services > Credentials`.
+9. Crea `OAuth client ID`.
+10. Elige tipo `Web application`.
+11. En `Authorized JavaScript origins`, agrega:
 
 ```text
 http://localhost:3000
 https://tu-dominio.vercel.app
 ```
 
-9. En `Authorized redirect URIs`, agrega:
+12. En `Authorized redirect URIs`, agrega:
 
 ```text
 http://localhost:3000/api/auth/callback/google
 https://tu-dominio.vercel.app/api/auth/callback/google
 ```
 
-10. Copia el `Client ID` en `AUTH_GOOGLE_ID`.
-11. Copia el `Client secret` en `AUTH_GOOGLE_SECRET`.
+13. Copia el `Client ID` en `AUTH_GOOGLE_ID`.
+14. Copia el `Client secret` en `AUTH_GOOGLE_SECRET`.
 
 Para produccion en Vercel, asegúrate tambien de configurar `AUTH_URL` si tu despliegue no detecta bien la URL publica:
 
@@ -132,6 +135,7 @@ Ejecuta este SQL en el editor SQL de Supabase. Si ya tenias eventos creados ante
 create table if not exists public.eventos (
   id uuid primary key,
   user_id text,
+  google_event_id text,
   titulo text not null,
   duracion_minutos integer not null check (duracion_minutos > 0),
   hora_sugerida text not null check (hora_sugerida ~ '^([01][0-9]|2[0-3]):[0-5][0-9]$'),
@@ -142,8 +146,24 @@ create table if not exists public.eventos (
 alter table public.eventos
   add column if not exists user_id text;
 
+alter table public.eventos
+  add column if not exists google_event_id text;
+
 create index if not exists eventos_user_fecha_hora_idx
   on public.eventos (user_id, fecha, hora_sugerida);
+
+create index if not exists eventos_google_event_id_idx
+  on public.eventos (google_event_id);
+
+create table if not exists public.tokens_google (
+  user_id text primary key,
+  access_token text not null,
+  refresh_token text,
+  access_token_expires_at timestamptz not null,
+  updated_at timestamptz not null default now()
+);
+
+alter table public.tokens_google enable row level security;
 
 alter table public.eventos enable row level security;
 
@@ -190,6 +210,8 @@ create policy "eventos_delete_own"
 ```
 
 La app escribe `user_id` desde la sesion de NextAuth en el backend. La `service_role` key evita depender de RLS durante las API routes, pero las politicas quedan listas como capa de seguridad para una futura integracion directa con Supabase desde el cliente.
+
+La tabla `tokens_google` guarda tokens sensibles de Google Calendar. Dejala sin politicas de acceso para cliente; solo debe usarse desde el backend con `SUPABASE_SERVICE_ROLE_KEY`.
 
 ## Desplegar en Vercel
 

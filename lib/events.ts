@@ -1,4 +1,9 @@
 import { randomUUID } from "node:crypto";
+import {
+  actualizarEventoGoogleCalendar,
+  borrarEventoGoogleCalendar,
+  crearEventoGoogleCalendar
+} from "@/lib/google-calendar";
 import { getSupabaseServerClient } from "@/lib/supabase";
 
 export type Prioridad = "alta" | "media" | "baja";
@@ -10,6 +15,7 @@ export type Evento = {
   duracion_minutos: number;
   hora_sugerida: string;
   prioridad: Prioridad;
+  google_event_id?: string | null;
 };
 
 type EventoRow = {
@@ -19,6 +25,7 @@ type EventoRow = {
   duracion_minutos: number;
   hora_sugerida: string;
   prioridad: Prioridad;
+  google_event_id: string | null;
 };
 
 export type EventoActualizable = Partial<
@@ -86,15 +93,72 @@ function desdeRow(row: EventoRow): Evento {
     titulo: row.titulo,
     duracion_minutos: row.duracion_minutos,
     hora_sugerida: row.hora_sugerida,
-    prioridad: row.prioridad
+    prioridad: row.prioridad,
+    google_event_id: row.google_event_id
   };
+}
+
+const EVENTO_SELECT =
+  "id, fecha, titulo, duracion_minutos, hora_sugerida, prioridad, google_event_id";
+
+async function vincularEventoConGoogleCalendar(
+  userId: string,
+  evento: Evento
+): Promise<Evento> {
+  try {
+    const googleEventId = await crearEventoGoogleCalendar(userId, evento);
+    const supabase = getSupabaseServerClient();
+    const { data, error } = await supabase
+      .from("eventos")
+      .update({ google_event_id: googleEventId })
+      .eq("user_id", userId)
+      .eq("id", evento.id)
+      .select(EVENTO_SELECT)
+      .maybeSingle();
+
+    if (error) {
+      throw new Error(`No se pudo guardar google_event_id: ${error.message}`);
+    }
+
+    return data ? desdeRow(data as EventoRow) : { ...evento, google_event_id: googleEventId };
+  } catch (error) {
+    console.error("No se pudo crear el evento en Google Calendar:", error);
+    return evento;
+  }
+}
+
+async function sincronizarActualizacionGoogleCalendar(userId: string, evento: Evento) {
+  try {
+    if (evento.google_event_id) {
+      await actualizarEventoGoogleCalendar(userId, evento.google_event_id, evento);
+      return evento;
+    }
+
+    return await vincularEventoConGoogleCalendar(userId, evento);
+  } catch (error) {
+    console.error("No se pudo actualizar el evento en Google Calendar:", error);
+    return evento;
+  }
+}
+
+async function sincronizarEliminacionGoogleCalendar(
+  userId: string,
+  googleEventId: string | null
+) {
+  if (!googleEventId) return;
+
+  try {
+    await borrarEventoGoogleCalendar(userId, googleEventId);
+  } catch (error) {
+    console.error("No se pudo borrar el evento en Google Calendar:", error);
+  }
 }
 
 export async function obtenerEventosPorFecha(userId: string, fecha = fechaLocalHoy()) {
   const supabase = getSupabaseServerClient();
   const { data, error } = await supabase
     .from("eventos")
-    .select("id, fecha, titulo, duracion_minutos, hora_sugerida, prioridad")
+    .select(EVENTO_SELECT)
     .eq("user_id", userId)
     .eq("fecha", fecha)
     .order("hora_sugerida", { ascending: true });
@@ -118,13 +182,16 @@ export async function guardarEventos(eventosNuevos: Evento[], userId: string) {
   const { data, error } = await supabase
     .from("eventos")
     .insert(eventosNuevos.map((evento) => ({ ...evento, user_id: userId })))
-    .select("id, fecha, titulo, duracion_minutos, hora_sugerida, prioridad");
+    .select(EVENTO_SELECT);
 
   if (error) {
     throw new Error(`No se pudieron guardar los eventos: ${error.message}`);
   }
 
-  return (data ?? []).map((row) => desdeRow(row as EventoRow));
+  const eventosGuardados = (data ?? []).map((row) => desdeRow(row as EventoRow));
+  return Promise.all(
+    eventosGuardados.map((evento) => vincularEventoConGoogleCalendar(userId, evento))
+  );
 }
 
 export async function eliminarEvento(userId: string, id: string, fechaRespuesta = fechaLocalHoy()) {
@@ -134,12 +201,17 @@ export async function eliminarEvento(userId: string, id: string, fechaRespuesta 
     .delete()
     .eq("user_id", userId)
     .eq("id", id)
-    .select("id");
+    .select("id, google_event_id");
 
   if (error) {
     throw new Error(`No se pudo eliminar el evento: ${error.message}`);
   }
 
+  const eventoEliminado = data?.[0] as Pick<EventoRow, "google_event_id"> | undefined;
+  await sincronizarEliminacionGoogleCalendar(
+    userId,
+    eventoEliminado?.google_event_id ?? null
+  );
   const eventosDeFecha = await obtenerEventosPorFecha(userId, fechaRespuesta);
 
   return {
@@ -160,7 +232,7 @@ export async function actualizarEvento(
     .update(cambios)
     .eq("user_id", userId)
     .eq("id", id)
-    .select("id, fecha, titulo, duracion_minutos, hora_sugerida, prioridad");
+    .select(EVENTO_SELECT);
 
   if (error) {
     throw new Error(`No se pudo actualizar el evento: ${error.message}`);
@@ -168,10 +240,13 @@ export async function actualizarEvento(
 
   const eventosDeFecha = await obtenerEventosPorFecha(userId, fechaRespuesta);
   const eventoActualizado = data?.[0] ? desdeRow(data[0] as EventoRow) : null;
+  const eventoSincronizado = eventoActualizado
+    ? await sincronizarActualizacionGoogleCalendar(userId, eventoActualizado)
+    : null;
 
   return {
-    encontrado: Boolean(eventoActualizado),
-    evento: eventoActualizado,
+    encontrado: Boolean(eventoSincronizado),
+    evento: eventoSincronizado,
     eventos: eventosDeFecha.eventos
   };
 }
