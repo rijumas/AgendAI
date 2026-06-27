@@ -22,7 +22,7 @@ type EventoRow = {
 };
 
 export type EventoActualizable = Partial<
-  Pick<Evento, "titulo" | "duracion_minutos" | "hora_sugerida" | "prioridad">
+  Pick<Evento, "titulo" | "fecha" | "duracion_minutos" | "hora_sugerida" | "prioridad">
 >;
 
 const FECHA_RE = /^\d{4}-\d{2}-\d{2}$/;

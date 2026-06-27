@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import {
   actualizarEvento,
   type EventoActualizable,
+  type Evento,
   eliminarEvento,
   esFechaValida,
   fechaLocalHoy,
@@ -12,6 +13,13 @@ import {
 } from "@/lib/events";
 
 type Prioridad = "alta" | "media" | "baja";
+type TipoAccion = "modificar" | "mover" | "borrar";
+
+type AccionEvento = {
+  id_evento: string;
+  tipo_accion: TipoAccion;
+  cambios: EventoActualizable;
+};
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -60,6 +68,52 @@ const eventosResponseSchema: Schema = {
           }
         }
       }
+    },
+    acciones: {
+      type: Type.ARRAY,
+      description:
+        "Acciones sobre eventos existentes. Usar solo cuando el usuario se refiere claramente a un evento existente del contexto.",
+      items: {
+        type: Type.OBJECT,
+        required: ["id_evento", "tipo_accion"],
+        properties: {
+          id_evento: {
+            type: Type.STRING,
+            description: "ID exacto del evento existente al que se refiere la accion."
+          },
+          tipo_accion: {
+            type: Type.STRING,
+            format: "enum",
+            enum: ["modificar", "mover", "borrar"],
+            description: "Tipo de accion a realizar sobre el evento existente."
+          },
+          titulo: {
+            type: Type.STRING,
+            description: "Nuevo titulo, solo si el usuario pidio cambiarlo."
+          },
+          fecha: {
+            type: Type.STRING,
+            description: "Nueva fecha en formato YYYY-MM-DD, solo si se mueve de dia.",
+            pattern: "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          duracion_minutos: {
+            type: Type.INTEGER,
+            description: "Nueva duracion en minutos, solo si se modifica.",
+            minimum: 1
+          },
+          hora_sugerida: {
+            type: Type.STRING,
+            description: "Nueva hora en formato HH:MM, solo si se modifica.",
+            pattern: "^\\d{2}:\\d{2}$"
+          },
+          prioridad: {
+            type: Type.STRING,
+            format: "enum",
+            enum: ["alta", "media", "baja"],
+            description: "Nueva prioridad, solo si se modifica."
+          }
+        }
+      }
     }
   },
   propertyOrdering: ["eventos"]
@@ -67,6 +121,13 @@ const eventosResponseSchema: Schema = {
 
 function esPrioridad(valor: unknown): valor is Prioridad {
   return typeof valor === "string" && ["alta", "media", "baja"].includes(valor);
+}
+
+function esTipoAccion(valor: unknown): valor is TipoAccion {
+  return (
+    typeof valor === "string" &&
+    ["modificar", "mover", "borrar"].includes(valor)
+  );
 }
 
 function normalizarCambiosEvento(body: Record<string, unknown>) {
@@ -107,10 +168,134 @@ function normalizarCambiosEvento(body: Record<string, unknown>) {
     cambios.prioridad = body.prioridad;
   }
 
+  if ("fecha" in body) {
+    if (typeof body.fecha !== "string" || !esFechaValida(body.fecha)) {
+      throw new Error('La fecha debe tener formato "YYYY-MM-DD".');
+    }
+    cambios.fecha = body.fecha;
+  }
+
   return cambios;
 }
 
-async function pedirEventosAGemini(textoUsuario: string) {
+function sumarDias(fecha: string, dias: number) {
+  const [year, month, day] = fecha.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day + dias));
+  return date.toISOString().slice(0, 10);
+}
+
+function detectarFechasRelevantes(textoUsuario: string) {
+  const hoy = fechaLocalHoy();
+  const texto = textoUsuario.toLowerCase();
+  const fechas = new Set<string>([hoy]);
+  const diasSemana: Record<string, number> = {
+    domingo: 0,
+    lunes: 1,
+    martes: 2,
+    miercoles: 3,
+    miércoles: 3,
+    jueves: 4,
+    viernes: 5,
+    sabado: 6,
+    sábado: 6
+  };
+
+  if (/\bayer\b/.test(texto)) fechas.add(sumarDias(hoy, -1));
+  if (/\bma[ñn]ana\b/.test(texto)) fechas.add(sumarDias(hoy, 1));
+  if (/\bpasado ma[ñn]ana\b/.test(texto)) fechas.add(sumarDias(hoy, 2));
+
+  const [year, month, day] = hoy.split("-").map(Number);
+  const hoyDate = new Date(Date.UTC(year, month - 1, day));
+  const hoyDia = hoyDate.getUTCDay();
+
+  for (const [dia, numeroDia] of Object.entries(diasSemana)) {
+    if (new RegExp(`\\b(?:el\\s+)?${dia}\\b`).test(texto)) {
+      const offset = (numeroDia - hoyDia + 7) % 7 || 7;
+      fechas.add(sumarDias(hoy, offset));
+    }
+  }
+
+  return [...fechas];
+}
+
+async function obtenerEventosContexto(textoUsuario: string) {
+  const fechas = detectarFechasRelevantes(textoUsuario);
+  const eventosPorFecha = await Promise.all(
+    fechas.map((fecha) => obtenerEventosPorFecha(fecha))
+  );
+  const eventos = eventosPorFecha.flatMap((resultado) => resultado.eventos);
+  const eventosUnicos = new Map(eventos.map((evento) => [evento.id, evento]));
+
+  return [...eventosUnicos.values()];
+}
+
+function serializarEventosContexto(eventos: Evento[]) {
+  if (eventos.length === 0) {
+    return "No hay eventos existentes relevantes en las fechas consultadas.";
+  }
+
+  return JSON.stringify(
+    eventos.map((evento) => ({
+      id: evento.id,
+      titulo: evento.titulo,
+      fecha: evento.fecha,
+      hora_sugerida: evento.hora_sugerida,
+      duracion_minutos: evento.duracion_minutos,
+      prioridad: evento.prioridad
+    }))
+  );
+}
+
+function normalizarAcciones(acciones: unknown, eventosContexto: Evento[]) {
+  if (!Array.isArray(acciones)) return [];
+
+  const idsExistentes = new Set(eventosContexto.map((evento) => evento.id));
+
+  return acciones
+    .map((accion): AccionEvento | null => {
+      if (!accion || typeof accion !== "object") return null;
+
+      const valor = accion as Record<string, unknown>;
+      if (
+        typeof valor.id_evento !== "string" ||
+        !idsExistentes.has(valor.id_evento) ||
+        !esTipoAccion(valor.tipo_accion)
+      ) {
+        return null;
+      }
+
+      let cambios: EventoActualizable;
+      try {
+        cambios = normalizarCambiosEvento(valor);
+      } catch {
+        return null;
+      }
+
+      return {
+        id_evento: valor.id_evento,
+        tipo_accion: valor.tipo_accion,
+        cambios
+      };
+    })
+    .filter((accion): accion is AccionEvento => accion !== null);
+}
+
+async function procesarAcciones(acciones: AccionEvento[]) {
+  for (const accion of acciones) {
+    if (accion.tipo_accion === "borrar") {
+      await eliminarEvento(accion.id_evento);
+      continue;
+    }
+
+    if (Object.keys(accion.cambios).length === 0) {
+      continue;
+    }
+
+    await actualizarEvento(accion.id_evento, accion.cambios);
+  }
+}
+
+async function pedirEventosAGemini(textoUsuario: string, eventosContexto: Evento[]) {
   const apiKey = process.env.GEMINI_API_KEY;
   const hoy = fechaLocalHoy();
 
@@ -133,7 +318,11 @@ async function pedirEventosAGemini(textoUsuario: string) {
       systemInstruction: [
         "Eres un asistente que convierte texto informal en espanol en eventos para una agenda diaria.",
         `La fecha de HOY es ${hoy}. Usa esta fecha como referencia actual.`,
+        `Eventos existentes relevantes: ${serializarEventosContexto(eventosContexto)}.`,
         "El usuario puede mencionar MULTIPLES eventos o tareas en una sola frase; separa cada tarea mencionada.",
+        'Si el usuario se refiere claramente a un evento existente por titulo similar, hora o contexto, devuelve una accion con el id_evento exacto en vez de crear un evento duplicado.',
+        'Usa tipo_accion "modificar" para cambiar hora_sugerida, duracion_minutos, titulo o prioridad; usa "mover" para cambiar fecha; usa "borrar" para cancelar o eliminar.',
+        "Si no hay forma clara de identificar el evento existente, crea un evento nuevo como siempre.",
         'Interpreta fechas relativas en espanol asi: "hoy" es la fecha actual, "manana" es la fecha actual + 1 dia, "ayer" es la fecha actual - 1 dia, "pasado manana" es la fecha actual + 2 dias.',
         'Los dias de la semana como "el lunes" o "el viernes" significan la proxima ocurrencia de ese dia desde la fecha actual.',
         "Si el usuario no menciona ninguna fecha ni expresion temporal, asume que el evento es para hoy.",
@@ -148,8 +337,15 @@ async function pedirEventosAGemini(textoUsuario: string) {
     throw new Error("Gemini no devolvio texto para parsear.");
   }
 
-  const parsed = JSON.parse(response.text) as { eventos?: unknown };
-  return normalizarEventos(parsed.eventos);
+  const parsed = JSON.parse(response.text) as {
+    eventos?: unknown;
+    acciones?: unknown;
+  };
+
+  return {
+    eventos: normalizarEventos(parsed.eventos),
+    acciones: normalizarAcciones(parsed.acciones, eventosContexto)
+  };
 }
 
 export async function GET(request: Request) {
@@ -261,20 +457,27 @@ export async function POST(request: Request) {
       );
     }
 
-    const eventosNuevos = await pedirEventosAGemini(texto);
+    const eventosContexto = await obtenerEventosContexto(texto);
+    const resultadoGemini = await pedirEventosAGemini(texto, eventosContexto);
+    const eventosNuevos = resultadoGemini.eventos;
+    const acciones = resultadoGemini.acciones;
 
-    if (eventosNuevos.length === 0) {
+    if (eventosNuevos.length === 0 && acciones.length === 0) {
       return NextResponse.json(
-        { error: "No se encontraron eventos validos en la respuesta." },
+        { error: "No se encontraron eventos ni acciones validas en la respuesta." },
         { status: 422 }
       );
     }
 
-    await guardarEventos(eventosNuevos);
+    if (eventosNuevos.length > 0) {
+      await guardarEventos(eventosNuevos);
+    }
+    await procesarAcciones(acciones);
     const { eventos: eventosHoy } = await obtenerEventosPorFecha(fechaLocalHoy());
 
     return NextResponse.json({
       eventos: eventosNuevos,
+      acciones,
       eventosHoy
     });
   } catch (error) {
