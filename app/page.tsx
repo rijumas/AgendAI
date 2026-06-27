@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { signIn, signOut, useSession } from "next-auth/react";
 import CalendarioGrid from "./CalendarioGrid";
 
 type Prioridad = "alta" | "media" | "baja";
@@ -76,6 +77,7 @@ function desplazarFecha(fecha: string, dias: number) {
 }
 
 export default function Home() {
+  const { data: session, status } = useSession();
   const [texto, setTexto] = useState("");
   const [fechaSeleccionada, setFechaSeleccionada] = useState(fechaLocalHoy);
   const [eventos, setEventos] = useState<Evento[]>([]);
@@ -129,6 +131,11 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
+    if (status !== "authenticated") {
+      setEventos([]);
+      return;
+    }
+
     const controller = new AbortController();
 
     async function cargarEventosSeleccionados() {
@@ -150,7 +157,7 @@ export default function Home() {
     return () => {
       controller.abort();
     };
-  }, [cargarEventos, fechaSeleccionada]);
+  }, [cargarEventos, fechaSeleccionada, status]);
 
   const totalMinutos = useMemo(
     () => eventos.reduce((total, evento) => total + evento.duracion_minutos, 0),
@@ -425,15 +432,75 @@ export default function Home() {
     setModoEntrada(vozDisponible ? "voz" : "texto");
   }
 
+  if (status === "loading") {
+    return (
+      <main className="mx-auto flex min-h-screen w-full max-w-5xl flex-col px-5 py-8 sm:px-8 sm:py-12">
+        <section className="mb-8">
+          <p className="mb-2 text-sm font-semibold uppercase tracking-wide text-mint">
+            AgendaIA
+          </p>
+          <h1 className="text-4xl font-bold leading-tight text-ink sm:text-5xl">
+            Convierte planes sueltos en eventos para hoy.
+          </h1>
+        </section>
+        <div className="rounded-lg border border-ink/10 bg-white/88 p-6 text-ink shadow-sm">
+          Cargando sesion...
+        </div>
+      </main>
+    );
+  }
+
+  if (status !== "authenticated") {
+    return (
+      <main className="mx-auto flex min-h-screen w-full max-w-3xl flex-col px-5 py-8 sm:px-8 sm:py-12">
+        <section className="mb-8">
+          <p className="mb-2 text-sm font-semibold uppercase tracking-wide text-mint">
+            AgendaIA
+          </p>
+          <h1 className="text-4xl font-bold leading-tight text-ink sm:text-5xl">
+            Convierte planes sueltos en eventos para hoy.
+          </h1>
+        </section>
+        <section className="rounded-lg border border-ink/10 bg-white/88 p-6 shadow-sm">
+          <h2 className="text-2xl font-bold text-ink">Inicia sesion</h2>
+          <p className="mt-2 text-sm text-ink/65">
+            Usa tu cuenta de Google para acceder a AgendaIA.
+          </p>
+          <button
+            type="button"
+            onClick={() => signIn("google")}
+            className="mt-6 inline-flex h-12 items-center justify-center rounded-md bg-ink px-6 text-sm font-bold text-white transition hover:bg-ink/90"
+          >
+            Iniciar sesion con Google
+          </button>
+        </section>
+      </main>
+    );
+  }
+
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-5xl flex-col px-5 py-8 sm:px-8 sm:py-12">
-      <section className="mb-8">
-        <p className="mb-2 text-sm font-semibold uppercase tracking-wide text-mint">
-          AgendaIA
-        </p>
-        <h1 className="text-4xl font-bold leading-tight text-ink sm:text-5xl">
-          Convierte planes sueltos en eventos para hoy.
-        </h1>
+      <section className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <p className="mb-2 text-sm font-semibold uppercase tracking-wide text-mint">
+            AgendaIA
+          </p>
+          <h1 className="text-4xl font-bold leading-tight text-ink sm:text-5xl">
+            Convierte planes sueltos en eventos para hoy.
+          </h1>
+        </div>
+        <div className="flex flex-col gap-2 sm:items-end">
+          <p className="text-sm font-semibold text-ink/70">
+            {session?.user?.email ?? session?.user?.name}
+          </p>
+          <button
+            type="button"
+            onClick={() => signOut()}
+            className="rounded-md border border-ink/15 bg-white px-3 py-2 text-sm font-bold text-ink/70 transition hover:bg-ink/5"
+          >
+            Cerrar sesion
+          </button>
+        </div>
       </section>
 
       <form

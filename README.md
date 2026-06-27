@@ -7,6 +7,7 @@ AgendaIA es un MVP open source hecho con Next.js, TypeScript y Tailwind CSS. Per
 - Node.js 20 o superior
 - Una API key de Gemini. Puedes crearla gratis, sin tarjeta de credito, en [Google AI Studio](https://aistudio.google.com/apikey).
 - Un proyecto gratis de Supabase. Puedes crearlo en [Supabase](https://supabase.com/).
+- Credenciales OAuth de Google para iniciar sesion con Auth.js.
 
 ## Correr localmente
 
@@ -28,6 +29,15 @@ cp .env.example .env.local
 GEMINI_API_KEY=tu_api_key_real
 NEXT_PUBLIC_SUPABASE_URL=https://tu-proyecto.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=tu_service_role_key
+AUTH_SECRET=tu_auth_secret_seguro
+AUTH_GOOGLE_ID=tu_google_oauth_client_id
+AUTH_GOOGLE_SECRET=tu_google_oauth_client_secret
+```
+
+Puedes generar `AUTH_SECRET` localmente con:
+
+```bash
+node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
 ```
 
 4. Inicia el servidor de desarrollo:
@@ -71,6 +81,42 @@ La ruta tambien acepta `GET /api/parse-event` para cargar los eventos guardados 
 
 Tambien acepta `GET /api/parse-event?fecha=YYYY-MM-DD` para cargar eventos de una fecha especifica, y `DELETE /api/parse-event?id=uuid&fecha=YYYY-MM-DD` para eliminar un evento por id.
 
+## Google Auth
+
+AgendaIA usa Auth.js (`next-auth`) con Google como unico metodo de login.
+
+Configura Google Cloud Console asi:
+
+1. Entra a [Google Cloud Console](https://console.cloud.google.com/).
+2. Crea o selecciona un proyecto.
+3. Ve a `APIs & Services > OAuth consent screen`.
+4. Configura la pantalla de consentimiento. Para este paso no necesitas Google Calendar API todavia.
+5. Ve a `APIs & Services > Credentials`.
+6. Crea `OAuth client ID`.
+7. Elige tipo `Web application`.
+8. En `Authorized JavaScript origins`, agrega:
+
+```text
+http://localhost:3000
+https://tu-dominio.vercel.app
+```
+
+9. En `Authorized redirect URIs`, agrega:
+
+```text
+http://localhost:3000/api/auth/callback/google
+https://tu-dominio.vercel.app/api/auth/callback/google
+```
+
+10. Copia el `Client ID` en `AUTH_GOOGLE_ID`.
+11. Copia el `Client secret` en `AUTH_GOOGLE_SECRET`.
+
+Para produccion en Vercel, asegúrate tambien de configurar `AUTH_URL` si tu despliegue no detecta bien la URL publica:
+
+```bash
+AUTH_URL=https://tu-dominio.vercel.app
+```
+
 ## Supabase
 
 1. Crea un proyecto gratis en [Supabase](https://supabase.com/).
@@ -106,6 +152,9 @@ create index if not exists eventos_fecha_hora_idx
 GEMINI_API_KEY=tu_api_key_real
 NEXT_PUBLIC_SUPABASE_URL=https://tu-proyecto.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=tu_service_role_key
+AUTH_SECRET=tu_auth_secret_seguro
+AUTH_GOOGLE_ID=tu_google_oauth_client_id
+AUTH_GOOGLE_SECRET=tu_google_oauth_client_secret
 ```
 
 4. Despliega el proyecto.
